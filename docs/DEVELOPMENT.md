@@ -84,7 +84,24 @@ tools/check.sh benchmark session 24 50 72631 dicts/tiger_sentence.codes.txt 0 1
 模拟处理器、翻译器及提交/取消周期，包含 tracker 计算，不包含原生组件和前端渲染。
 每种场景以独立进程重复至少三次并取中位数。预热轮数默认 `0`，`1` 表示计时前用同一语料
 预热一轮。时间为进程 CPU 时间；计时区间不强制 GC，堆和当前 RSS 在计时后的 GC 后读取，
-峰值 RSS 包含启动和预热。该基准不代表自然语料分布或 iOS 真机内存限制。
+峰值 RSS 包含启动和预热。该基准不代表自然语料分布或 iOS 真机内存限制。基准只在本地
+手动执行，GitHub 工作流不运行任何性能测试。
+
+## CI 覆盖边界
+
+GitHub 工作流只运行 `tools/check.sh portable` 和 `tests/package.py`，覆盖 Lua 语法、
+不依赖模型的行为回归和打包自测。以下检查依赖模型、原生库或本地工具，工作流无法
+执行，改动代码时必须在本机补齐：
+
+- `tools/check.sh all`：格式、Shell lint、Lua 类型、模型身份、完整行为回归和错误分支
+  覆盖率。需要模型二进制 `models/sentence-ngram-mobile.bin`（从 Release 下载，SHA-256
+  见 `models/sentence-ngram-mobile.meta.yaml`）、`stylua`、`shfmt`、`shellcheck` 和
+  `lua-language-server`。
+- `tools/check.sh native`：Rime 组件交互，需要 C++17 编译器、librime 和 librime-lua。
+- `tools/check.sh comparison`：改动解码、评分或排序时对照参考实现。
+- `tools/check.sh benchmark`：改动热路径时手动测量。
+
+模型二进制不入库、不进工作流，所以涉及模型的回归只能在本机执行。
 
 ## 发布检查
 
@@ -119,12 +136,15 @@ tools/check.sh benchmark session 24 50 72631 dicts/tiger_sentence.codes.txt 0 1
 独立模型文件按根目录元数据中的身份复用，不必随每次程序更新重复下载；
 Release 创建后手动上传该 SHA-256 对应的模型附件。
 
-工作流 `.github/workflows/package.yml` 在 `portable` 与 `tests/package.py` 通过后调用
-`tools/package.py`。ZIP 的根目录为 `rime/`；打包使用公开示例，不读取根目录个人词表。
-模型二进制不进入源码或此运行包，模型元数据位于包根目录，包内不创建 `models/`。
-CHANGELOG 最新条目置顶，日常变更记在 `## YYYY-MM-DD` 标题下，发布时在同一标题末尾
-追加版本号（如 `## 2026-09-10 - v1.0.0`）形成版本标题。Release 工作流以 Tag 作为
-Release 版本，并读取 CHANGELOG 中该版本标题到下一个带版本标题之间的全部日期段，
-仅标日期的条目也计入。Release 说明不重复版本号，将版本标题改为日期并把标题整体
-降一级，另列出 Schema、Dict 和 Model 版本，模型附件则手动上传。固定 ZIP 时间戳和
-文件顺序使相同输入重复打包字节一致；输出原子替换，失败时旧包保留，临时文件清理。
+分支推送、拉取请求和手动触发运行 `.github/workflows/check.yml`：检查源码中没有
+生成词典，执行 `tools/check.sh portable` 与 `tests/package.py`，不构建发布包，也不读取
+模型二进制。推送 `v*` Tag 运行 `.github/workflows/release.yml`：校验后调用
+`tools/package.py` 构建 ZIP、生成 Release 说明并创建 Release。ZIP 的根目录为 `rime/`；
+打包使用公开示例，不读取根目录个人词表。模型二进制不进入源码或此运行包，模型元数据
+位于包根目录，包内不创建 `models/`。CHANGELOG 最新条目置顶，日常变更记在
+`## YYYY-MM-DD` 标题下，发布时在同一标题末尾追加版本号（如 `## 2026-09-10 - v1.0.0`）
+形成版本标题。Release 工作流以 Tag 作为 Release 版本，并读取 CHANGELOG 中该版本标题到
+下一个带版本标题之间的全部日期段，仅标日期的条目也计入。Release 说明不重复版本号，
+将版本标题改为日期并把标题整体降一级，另列出 Schema、Dict 和 Model 版本，模型附件则
+手动上传。固定 ZIP 时间戳和文件顺序使相同输入重复打包字节一致；输出原子替换，失败时
+旧包保留，临时文件清理。

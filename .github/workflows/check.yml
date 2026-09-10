@@ -1,7 +1,8 @@
-name: Package Rime
+name: Check Rime
 
 on:
   push:
+    branches: ['**']
   pull_request:
   workflow_dispatch:
 
@@ -9,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  package:
+  check:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -20,18 +21,10 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y lua5.4
       - name: Check for generated lexicons in source
         run: test -z "$(git ls-files lua/tiger_sentence/data/lexicon.bin lua/tiger_sentence/data/ranks.lua)"
-      - name: Verify
+      - name: Verify source
         env:
           LUA: lua5.4
           LUAC: luac5.4
         run: tools/check.sh portable
-      - name: Build runtime package
-        run: |
-          python3 tests/package.py --lua lua5.4
-          python3 tools/package.py "$RUNNER_TEMP/rime.zip" --lua lua5.4
-      - uses: actions/upload-artifact@v7
-        with:
-          name: rime
-          path: ${{ runner.temp }}/rime.zip
-          archive: false
-          if-no-files-found: error
+      - name: Test packaging
+        run: python3 tests/package.py --lua lua5.4
