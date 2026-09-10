@@ -1,0 +1,13 @@
+/.stfolder/
+/build/
+/sync/
+/models/*.bin
+
+/.stignore
+/*.txt
+!/*.example.txt
+/installation.yaml
+/lua/tiger_sentence/data/lexicon.bin
+/lua/tiger_sentence/data/ranks.lua
+/tiger_sentence.custom.yaml
+/user.yaml

@@ -1,0 +1,102 @@
+# encoding: utf-8
+schema:
+  schema_id: tiger_sentence
+  name: 虎整句
+  version: "20260910"
+  author:
+    - TigerClaw
+    - Caelumix
+  description: |
+    从虎整句常用字词表生成的变长整句方案
+    独立输入的单一码表边显示全部名次；分段路径保留首选简词，并可允许重码单字参与组句
+    一码字只在整段就是该一码时生效；未上屏编码不超过 128 码
+    分号、引号和数字按前方码段的根码表候选等级选重，不同合法切分共同竞争
+    空闲斜杠引导的分类符号由 Rime 原生组件处理
+    根目录补充语料参与候选排序，但不提高自动提前上屏的置信度
+    首次整句编码时用 Lua 优先分页加载 sentence-ngram-mobile.bin 做 Kneser-Ney 打分
+
+switches:
+  - name: ascii_mode
+    reset: 0
+    states: [ 中文, 西文 ]
+  - name: ascii_punct
+    states: [ 。，, ．， ]
+  - name: full_shape
+    states: [ 半角, 全角 ]
+  - name: tiger_sentence_early_commit
+    reset: 1
+    states: [ 提前上屏关, 提前上屏开 ]
+  - name: tiger_sentence_allow_duplicate_single
+    reset: 1
+    states: [ 单字重码组句关, 单字重码组句开 ]
+
+engine:
+  processors:
+    - ascii_composer
+    - recognizer
+    - lua_processor@*tiger_sentence/rime/quick_symbol
+    - lua_processor@*tiger_sentence/rime/processor
+    - key_binder
+    - selector
+    - speller
+    - punctuator
+    - navigator
+    - express_editor
+  segmentors:
+    - ascii_segmentor
+    - matcher
+    - abc_segmentor
+    - punct_segmentor
+    - fallback_segmentor
+  translators:
+    - punct_translator
+    - lua_translator@*tiger_sentence/rime/translator
+  filters:
+    - uniquifier
+
+speller:
+  alphabet: "zyxwvutsrqponmlkjihgfedcba;'0123456789"
+  initials: "abcdefghijklmnopqrstuvwxyz"
+  delimiter: " "
+  auto_select: false
+
+menu:
+  page_size: 5
+
+tiger_sentence:
+  # 提前上屏与空码自动上屏共用的最短保留编码数；概率型提交仍至少保留 3 码
+  min_retained_raw_length: 0
+  # 前 N 个高频字只使用最优码组句；0 表示关闭过滤
+  high_freq_limit: 1500
+
+key_binder:
+  bindings:
+    - { when: has_menu, accept: semicolon, send: 2 }
+    - { when: has_menu, accept: apostrophe, send: 3 }
+    - { when: has_menu, accept: Tab, send: Down }
+    # 兼容反向 Tab 的三种键符表示
+    - { when: has_menu, accept: Shift+Tab, send: Up }
+    - { when: has_menu, accept: ISO_Left_Tab, send: Up }
+    - { when: has_menu, accept: Shift+ISO_Left_Tab, send: Up }
+    - { when: paging, accept: minus, send: Page_Up }
+    - { when: has_menu, accept: equal, send: Page_Down }
+
+punctuator:
+  __include: dicts/tiger_sentence_symbols:/punctuator
+  symbols:
+    __include: dicts/tiger_sentence_symbols:/symbols
+
+recognizer:
+  import_preset: default
+  patterns:
+    __include: default:/recognizer/patterns
+    punct: '^/[a-z]+$'
+
+ascii_composer:
+  good_old_caps_lock: true
+  switch_key:
+    Caps_Lock: clear
+    Shift_L: commit_code
+    Shift_R: commit_code
+    Control_L: noop
+    Control_R: noop

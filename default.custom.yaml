@@ -1,0 +1,6 @@
+patch:
+  schema_list:
+    - schema: tiger_sentence
+
+  # 禁用 Rime 所有方案选单快捷键：Ctrl+`, Ctrl+Shift+`, F4
+  switcher/hotkeys: ~

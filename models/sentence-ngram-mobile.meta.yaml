@@ -1,0 +1,5 @@
+# version 标识概率数据版本；二进制头中的 version 只标识 TCSKNM02 格式版本
+# SHA-256 绑定经过测试的确切文件，避免相同数据版本下误用不同构建产物
+version: "20260822"
+file: "sentence-ngram-mobile.bin"
+sha256: "e3953f8f1526b871eb81fe887a8ae4a6edf79edffd33e388b95e2915adadb2d3"
