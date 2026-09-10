@@ -134,7 +134,7 @@ GitHub 工作流只运行 `tools/check.sh portable` 和 `tests/package.py`，覆
 打包须在临时目录中按文件清单组装，显式指定构建输入；配置补丁只包含指定的
 `default.custom.yaml`，不复制其他 custom、私有补充语料或私有白名单。
 独立模型文件按根目录元数据中的身份复用，不必随每次程序更新重复下载；
-Release 创建后手动上传该 SHA-256 对应的模型附件。
+只有模型身份变化时才需要手动上传对应的模型附件。
 
 分支推送、拉取请求和手动触发运行 `.github/workflows/check.yml`：检查源码中没有
 生成词典，执行 `tools/check.sh portable` 与 `tests/package.py`，不构建发布包，也不读取
@@ -145,6 +145,7 @@ Release 创建后手动上传该 SHA-256 对应的模型附件。
 `## YYYY-MM-DD` 标题下，发布时在同一标题末尾追加版本号（如 `## 2026-09-10 - v1.0.0`）
 形成版本标题。Release 工作流以 Tag 作为 Release 版本，并读取 CHANGELOG 中该版本标题到
 下一个带版本标题之间的全部日期段，仅标日期的条目也计入。Release 说明不重复版本号，
-将版本标题改为日期并把标题整体降一级，另列出 Schema、Dict 和 Model 版本，模型附件则
-手动上传。固定 ZIP 时间戳和文件顺序使相同输入重复打包字节一致；输出原子替换，失败时
-旧包保留，临时文件清理。
+将版本标题改为日期并把标题整体降一级，列出 Schema、Dict 和 Model 版本；仅当
+`models/sentence-ngram-mobile.meta.yaml` 的 `sha256` 与上一个 Tag 不同（含没有上一个
+Tag）时才追加 `## 模型` 段。固定 ZIP 时间戳和文件顺序使相同输入重复打包字节一致；
+输出原子替换，失败时旧包保留，临时文件清理。

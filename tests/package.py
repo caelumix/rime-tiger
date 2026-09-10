@@ -109,11 +109,27 @@ def main():
         content = notes.read_text()
         assert (
             'v1.0.0' not in content
+            and '## 模型' not in content
             and '- Schema：`20260910`' in content
             and '- Dict：`20260904`' in content
             and '- Model：`20260822`' in content
             and 'e3953f8f1526b871eb81fe887a8ae4a6edf79edffd33e388b95e2915adadb2d3'
             in content
+        )
+        subprocess.run(
+            [
+                'python3',
+                str(ROOT / 'tools/release_notes.py'),
+                'v1.0.0',
+                str(notes),
+                '--model-changed',
+            ],
+            check=True,
+        )
+        content = notes.read_text()
+        assert (
+            '## 模型' in content
+            and '- 文件：`sentence-ngram-mobile.bin`' in content
         )
         release_notes = runpy.run_path(str(ROOT / 'tools/release_notes.py'))
         section = release_notes['changelog_section'](

@@ -57,9 +57,13 @@ def changelog_section(changelog, release_version):
 
 
 def main():
-    if len(sys.argv) not in (2, 3):
-        raise SystemExit('用法：tools/release_notes.py 发布版本 [输出文件]')
-    release_version = sys.argv[1]
+    model_changed = '--model-changed' in sys.argv[1:]
+    arguments = [arg for arg in sys.argv[1:] if arg != '--model-changed']
+    if len(arguments) not in (1, 2):
+        raise SystemExit(
+            '用法：tools/release_notes.py 发布版本 [输出文件] [--model-changed]'
+        )
+    release_version = arguments[0]
     changelog = (ROOT / 'CHANGELOG.md').read_text()
     schema = (ROOT / 'tiger_sentence.schema.yaml').read_text()
     dictionary = (ROOT / 'dicts/tiger_sentence.codes.txt').read_text()
@@ -88,13 +92,14 @@ def main():
         '## 变更\n\n'
         f'{changes}\n'
     )
-    output += (
-        '\n## 模型\n\n'
-        f'- 文件：`{filename.group(1)}`\n'
-        '- 模型二进制需单独上传到此 Release\n'
-    )
-    if len(sys.argv) == 3:
-        Path(sys.argv[2]).write_text(output)
+    if model_changed:
+        output += (
+            '\n## 模型\n\n'
+            f'- 文件：`{filename.group(1)}`\n'
+            '- 模型二进制需单独上传到此 Release\n'
+        )
+    if len(arguments) == 2:
+        Path(arguments[1]).write_text(output)
     else:
         sys.stdout.write(output)
 
