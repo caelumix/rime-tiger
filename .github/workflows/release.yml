@@ -1,4 +1,4 @@
-name: Release Rime
+name: Release rime-tiger
 
 on:
   push:
@@ -34,5 +34,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP/rime.zip" \
-            --title "Rime $GITHUB_REF_NAME" \
+            --title "rime-tiger $GITHUB_REF_NAME" \
             --notes-file "$RUNNER_TEMP/release-notes.md"

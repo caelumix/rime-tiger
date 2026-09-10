@@ -1,4 +1,4 @@
-name: Check Rime
+name: Check rime-tiger
 
 on:
   push:
