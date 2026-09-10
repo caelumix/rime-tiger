@@ -34,9 +34,10 @@ def main():
             'LICENSE',
         ):
             shutil.copyfile(ROOT / name, staging / name)
+        (staging / 'models').mkdir()
         shutil.copyfile(
             ROOT / 'models/sentence-ngram-mobile.meta.yaml',
-            staging / 'sentence-ngram-mobile.meta.yaml',
+            staging / 'models/sentence-ngram-mobile.meta.yaml',
         )
         for name in ('supplement', 'full_code_whitelist'):
             shutil.copyfile(

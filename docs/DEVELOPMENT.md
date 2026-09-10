@@ -141,7 +141,7 @@ GitHub 工作流只运行 `tools/check.sh portable` 和 `tests/package.py`，覆
 模型二进制。推送 `v*` Tag 运行 `.github/workflows/release.yml`：校验后调用
 `tools/package.py` 构建 ZIP、生成 Release 说明并创建 Release。ZIP 的根目录为 `rime/`；
 打包使用公开示例，不读取根目录个人词表。模型二进制不进入源码或此运行包，模型元数据
-位于包根目录，包内不创建 `models/`。CHANGELOG 最新条目置顶，日常变更记在
+位于包的 `models/` 目录。CHANGELOG 最新条目置顶，日常变更记在
 `## YYYY-MM-DD` 标题下，发布时在同一标题末尾追加版本号（如 `## 2026-09-10 - v1.0.0`）
 形成版本标题。Release 工作流以 Tag 作为 Release 版本，并读取 CHANGELOG 中该版本标题到
 下一个带版本标题之间的全部日期段，仅标日期的条目也计入。Release 说明不重复版本号，

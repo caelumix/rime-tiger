@@ -50,7 +50,7 @@ def main():
                 for name in (
                     'default.custom.yaml',
                     'tiger_sentence.schema.yaml',
-                    'sentence-ngram-mobile.meta.yaml',
+                    'models/sentence-ngram-mobile.meta.yaml',
                     'LICENSE',
                     'tiger_sentence.supplement.txt',
                     'tiger_sentence.full_code_whitelist.txt',
@@ -58,7 +58,6 @@ def main():
                     'lua/tiger_sentence/data/ranks.lua',
                 )
             )
-            assert not any(name.startswith('rime/models/') for name in names)
             assert names == expected, names ^ expected
             assert (
                 archive.read('rime/lua/tiger_sentence/data/lexicon.bin')[:8]
