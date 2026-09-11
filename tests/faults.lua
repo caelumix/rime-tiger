@@ -174,7 +174,7 @@ assert(assert(loadfile(output))().count == 0, "缺失字频没有关闭过滤")
 local saved_ranks = package.loaded["tiger_sentence.data.ranks"]
 package.loaded["tiger_sentence.data.ranks"] = assert(loadfile(output))()
 local empty_rank_model = assert(loadfile(root .. "/lua/tiger_sentence/model.lua"))()
-assert(empty_rank_model.isolation_penalty("龘") == 0)
+assert(empty_rank_model.reference_isolation_penalty("龘") == 0)
 package.loaded["tiger_sentence.data.ranks"] = saved_ranks
 write(ranks, "字\n")
 write(binary .. ".tmp", "占用")

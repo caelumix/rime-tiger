@@ -34,6 +34,10 @@ local function active_raw(state, live_raw)
     return state.committed_raw .. live_raw
 end
 
+local function active_lock(state)
+    return state.locks and state.locks[#state.locks]
+end
+
 local function reset_evidence(state)
     state.trackers = {}
     state.last_seen_raw = ""
@@ -169,7 +173,7 @@ local function commit_mature_tracker(env, state, full_raw)
     local minimum = configured_integer(
         env,
         "tiger_sentence/min_retained_raw_length",
-        config.early_commit_retained_raw_length
+        config.min_retained_raw_length
     )
     local retained = math.max(config.early_commit_retained_raw_length, minimum)
     local selected
@@ -214,7 +218,8 @@ local function try_early_commit(env, state, live_raw, policy)
         true,
         state.committed_text,
         policy.allow_duplicate,
-        policy.high_frequency_limit
+        policy.high_frequency_limit,
+        active_lock(state)
     )
     local candidates = decoded
     if decoded.early_commit_uses_incomplete_tail then
@@ -306,7 +311,8 @@ local function capture_empty_code_candidate(state, full_raw, policy)
         true,
         state.committed_text,
         policy.allow_duplicate,
-        policy.high_frequency_limit
+        policy.high_frequency_limit,
+        active_lock(state)
     )
     if #decoded == 0 then
         return nil
@@ -314,7 +320,16 @@ local function capture_empty_code_candidate(state, full_raw, policy)
     local eligible = {}
     local unrestricted = has_selection_suffix(full_raw)
     for _, candidate in ipairs(decoded) do
-        if unrestricted or candidate.max_rank <= 1 then
+        -- 合法的非首选重码单字也计入唯一性与置信度
+        local previous = candidate.path and candidate.path.previous
+        if
+            unrestricted
+            or candidate.max_rank <= 1
+            or (
+                policy.allow_duplicate
+                and ((previous and (previous.text or "") ~= "") or text.length(candidate.text) == 1)
+            )
+        then
             eligible[#eligible + 1] = candidate
         end
     end
@@ -338,6 +353,8 @@ local function capture_empty_code_candidate(state, full_raw, policy)
     local previous = first.path.previous
     return {
         text = first.text,
+        -- 唯一候选时还要排除该文本本身后确认没有其它完整组句路径
+        requires_uniqueness_check = #eligible == 1,
         base_raw_length = #full_raw,
         last_segment_start = previous and previous.raw_length or 0,
     }
@@ -361,7 +378,25 @@ local function try_empty_code_commit(env, state, full_before, appended, policy)
             full_raw,
             state.committed_text,
             policy.allow_duplicate,
-            policy.high_frequency_limit
+            policy.high_frequency_limit,
+            nil,
+            false,
+            active_lock(state)
+        )
+    then
+        state.empty_code_pending = nil
+        return false
+    end
+    if
+        pending.requires_uniqueness_check
+        and decoder.has_complete_candidate(
+            full_raw:sub(1, pending.base_raw_length),
+            pending.committed_text,
+            policy.allow_duplicate,
+            policy.high_frequency_limit,
+            pending.text,
+            true,
+            active_lock(state)
         )
     then
         state.empty_code_pending = nil
@@ -371,7 +406,11 @@ local function try_empty_code_commit(env, state, full_before, appended, policy)
     if lexicon.has_proper_prefix(extended_last_segment, policy.high_frequency_limit) then
         return false
     end
-    local minimum = configured_integer(env, "tiger_sentence/min_retained_raw_length", 0)
+    local minimum = configured_integer(
+        env,
+        "tiger_sentence/min_retained_raw_length",
+        config.min_retained_raw_length
+    )
     if minimum > 0 and #full_raw - pending.base_raw_length < minimum then
         return false
     end
@@ -402,6 +441,77 @@ local function has_active_session(state)
         or state.last_seen_raw ~= ""
         or next(state.trackers) ~= nil
         or state.suspended
+        or active_lock(state) ~= nil
+        or state.tab_pending
+end
+
+-- 高亮后继续输入字母：固定该候选的文本与编码边界，后续候选只从锁定处扩展
+local function lock_highlighted_candidate(env, state, full_before, character, policy)
+    local context = env.engine.context
+    local composition = context.composition
+    local segment = composition and not composition:empty() and composition:back()
+    local target = segment and segment.selected_index or 0
+    local decoded = decoder.decode(
+        full_before,
+        false,
+        state.committed_text,
+        policy.allow_duplicate,
+        policy.high_frequency_limit,
+        active_lock(state)
+    )
+    local selected, visible = nil, 0
+    for _, item in ipairs(decoded) do
+        if
+            item.text:sub(1, #state.committed_text) == state.committed_text
+            and #item.text > #state.committed_text
+        then
+            if visible == target then
+                selected = item
+                break
+            end
+            visible = visible + 1
+        end
+    end
+    if not selected or not selected.path or selected.path.raw_length <= #state.committed_raw then
+        return false
+    end
+    local boundaries, node = {}, selected.path
+    while node and node.raw_length > 0 do
+        table.insert(boundaries, 1, node.raw_length .. "," .. node.text_length .. ";")
+        node = node.previous
+    end
+    local commit, committed_raw
+    if context:get_option("tiger_sentence_early_commit") then
+        commit = selected.text:sub(#state.committed_text + 1)
+        committed_raw = full_before:sub(1, selected.path.raw_length)
+    end
+    local previous_text, previous_raw = state.committed_text, state.committed_raw
+    -- 锁定先于组合输入重建：替换触发的翻译必须看到锁定边界
+    state.locks[#state.locks + 1] = {
+        raw = full_before:sub(1, selected.path.raw_length),
+        text = selected.text,
+        boundaries = table.concat(boundaries),
+    }
+    if commit then
+        state.committed_text = selected.text
+        state.committed_raw = committed_raw
+    end
+    local remaining = full_before:sub(#state.committed_raw + 1)
+    local rebuilt, rebuild_error = pcall(replace_input, context, remaining .. character)
+    if not rebuilt then
+        table.remove(state.locks)
+        state.committed_text = previous_text
+        state.committed_raw = previous_raw
+        error(rebuild_error, 0)
+    end
+    -- 替换成功后才能丢弃证据，失败时保持原会话状态
+    reset_evidence(state)
+    state.empty_code_pending = nil
+    state.suspended = false
+    if commit then
+        env.engine:commit_text(commit)
+    end
+    return true
 end
 
 local function handle_character(character, context, state, env)
@@ -420,6 +530,11 @@ local function handle_character(character, context, state, env)
     local policy = decode_policy(env)
     local full_before = active_raw(state, input)
     local letter = character:match("^[a-z]$") ~= nil
+    local confirm = state.tab_pending and letter
+    state.tab_pending = false
+    if confirm and lock_highlighted_candidate(env, state, full_before, character, policy) then
+        return 1
+    end
     if not letter then
         state.empty_code_pending = nil
     elseif try_empty_code_commit(env, state, full_before, character, policy) then
@@ -467,8 +582,28 @@ local function handle_composition_key(representation, context, state, env)
         return 1
     end
     if representation == "BackSpace" or representation == "Delete" then
+        state.tab_pending = false
         reset_evidence(state)
         state.empty_code_pending = nil
+        if representation == "BackSpace" and active_lock(state) then
+            -- 退到锁定编码以内即解锁；锁定的边界不再成立
+            local remaining = (context.input or ""):sub(1, -2)
+            local length = #state.committed_raw + #remaining
+            while
+                active_lock(state)
+                and #active_lock(state).raw > #state.committed_raw
+                and length <= #active_lock(state).raw
+            do
+                table.remove(state.locks)
+            end
+            if remaining == "" then
+                context:clear()
+                reset_session(env)
+            else
+                replace_input(context, remaining)
+            end
+            return 1
+        end
         return 2
     end
     if
@@ -480,7 +615,11 @@ local function handle_composition_key(representation, context, state, env)
         reset_evidence(state)
         state.empty_code_pending = nil
         state.suspended = true
-        return cycle_highlight(context, representation == "Tab" and 1 or -1) and 1 or 2
+        if cycle_highlight(context, representation == "Tab" and 1 or -1) then
+            state.tab_pending = true
+            return 1
+        end
+        return 2
     end
     if navigation_keys[representation] then
         reset_evidence(state)
@@ -489,8 +628,8 @@ local function handle_composition_key(representation, context, state, env)
         return 2
     end
     if representation == "space" then
-        if not context:has_menu() or not context:confirm_current_selection() then
-            return 2
+        if context:has_menu() then
+            context:confirm_current_selection()
         end
         reset_session(env)
         return 1
@@ -535,7 +674,8 @@ function M.translator(input, segment, env)
         false,
         state.committed_text,
         policy.allow_duplicate,
-        policy.high_frequency_limit
+        policy.high_frequency_limit,
+        active_lock(state)
     )
     for _, item in ipairs(results) do
         -- 完整格网已按单字重码开关和显式选重筛选，提交前缀不改变续句资格

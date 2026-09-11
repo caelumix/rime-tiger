@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""用公开数据运行参考差分与缓存消融；所有部署和生成物位于临时目录"""
+"""用公开数据运行参考差分与缓存消融；解码对照按组合并行分片，生成物位于临时目录"""
 
 import argparse
+import concurrent.futures
 import hashlib
 import json
 import os
@@ -73,6 +74,41 @@ def replace(path, old, new):
     path.write_text(source.replace(old, new))
 
 
+# 解码对照的四个组合互相独立，分片并行执行后再合并计数
+DECODE_SHARDS = ('0,false', '0,true', '1500,false', '1500,true')
+
+
+def decode_comparison(lua, current, reference_backend, corpus_file):
+    command = [
+        lua,
+        ROOT / 'tests/comparison.lua',
+        current,
+        reference_backend,
+        corpus_file,
+    ]
+    environment = dict(os.environ)
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=len(DECODE_SHARDS)
+    ) as pool:
+
+        def shard_result(shard):
+            return json.loads(
+                run(command, env={**environment, 'COMPARISON_SHARD': shard})
+            )
+
+        results = list(pool.map(shard_result, DECODE_SHARDS))
+    return {
+        'comparisons': sum(result['comparisons'] for result in results),
+        'edit_steps': sum(result['edit_steps'] for result in results),
+        'reference_backend_cache_mismatches': sum(
+            result['reference_backend_cache_mismatches'] for result in results
+        ),
+        'edit_failures': [
+            failure for result in results for failure in result['edit_failures']
+        ],
+    }
+
+
 def corpus():
     codes = []
     by_text = {}
@@ -98,6 +134,8 @@ def corpus():
         '学习知识需要时间',
         '这是一个测试',
         '过去现在和未来',
+        '题目',
+        '题目是目',
     ]
     result = [
         'xrxbj',
@@ -105,6 +143,9 @@ def corpus():
         'korylkugkugkskorkor',
         'kormylkugkugkskorgkorg',
         'awmenamcunta',
+        'otqm',
+        'otwqm',
+        'otwqmqm',
         'a' * 28,
         'gyy' * 42 + 'ae',
         'gyy' * 60,
@@ -226,14 +267,8 @@ def main():
         decoded = (
             None
             if args.quick
-            else json.loads(
-                run([
-                    args.lua,
-                    ROOT / 'tests/comparison.lua',
-                    current,
-                    reference_backend,
-                    corpus_file,
-                ])
+            else decode_comparison(
+                args.lua, current, reference_backend, corpus_file
             )
         )
         binary = scratch / 'trace'
@@ -267,6 +302,39 @@ def main():
                 + list(b'xrxbj ')
                 + [0xFF1B],
             ))
+        for index, raw in enumerate(inputs[:20]):
+            for early in (0, 1):
+                cases.append((
+                    f'lock-{index}-{early}',
+                    early,
+                    1,
+                    list(raw.encode()) + [0xFF09, ord('a'), 32, 0xFF1B],
+                ))
+                cases.append((
+                    f'unlock-{index}-{early}',
+                    early,
+                    1,
+                    list(raw.encode())
+                    + [0xFF09, ord('a'), 0xFF08, ord('b'), 32, 0xFF1B],
+                ))
+        # 无候选时空格只重置会话，不改写组合输入
+        for index, raw in enumerate(('zzzzzzzz', 'qjqjqjqj', 'otwqmzz')):
+            for early in (0, 1):
+                cases.append((
+                    f'empty-{index}-{early}',
+                    early,
+                    1,
+                    list(raw.encode()) + [32],
+                ))
+        # 空码顶屏计入合法非首选重码单字：整段单边不再提前提交首选单字
+        for index, raw in enumerate(('hxq', 'hpx', 'yca')):
+            for early in (0, 1):
+                cases.append((
+                    f'pending-{index}-{early}',
+                    early,
+                    1,
+                    list(raw.encode()) + [32],
+                ))
         snapshots = {
             name: traces(binary, path, args.shared, cases)
             for name, path in (
@@ -329,18 +397,21 @@ def main():
                 'local PAGE_CACHE_BYTES = 2 * 1024 * 1024',
                 'local PAGE_CACHE_BYTES = 8 * 1024 * 1024',
             )
-            sentence_cache = scratch / 'sentence-cache'
-            prepare(sentence_cache, args.reference, args.lua)
+            no_path_cache = scratch / 'no-path-cache'
+            prepare(no_path_cache, args.reference, args.lua)
             replace(
-                sentence_cache / 'lua/tiger_sentence/model.lua',
-                'if #characters <= 6 then',
-                'do',
+                no_path_cache / 'lua/tiger_sentence/decoder.lua',
+                '    if item._isolation_penalty ~= nil then\n'
+                '        return item._isolation_penalty\n'
+                '    end\n'
+                '    local characters = item.edge_chars\n',
+                '    local characters = item.edge_chars\n',
             )
             samples = {
                 'current': [],
                 'reference_backend': [],
                 'large_cache': [],
-                'sentence_cache': [],
+                'no_path_cache': [],
             }
             for repeat in range(3):
                 order = [
@@ -351,7 +422,7 @@ def main():
                         'reference_backend',
                     ),
                     ('large_cache', large_cache, 'current'),
-                    ('sentence_cache', sentence_cache, 'current'),
+                    ('no_path_cache', no_path_cache, 'current'),
                 ]
                 if repeat % 2:
                     order.reverse()

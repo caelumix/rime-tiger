@@ -119,7 +119,30 @@ local function has_observed_bigram(loaded, previous, target)
     return value
 end
 
-function M.isolation_penalty(value)
+-- 路径级缓存只需要三个判定入口：是否启用、字符是否生僻、两个字符是否成词
+function M.isolation_enabled()
+    return ranks.count > 0 and ensure() ~= nil
+end
+
+---@param character string 单个 UTF-8 字符
+function M.is_rare_character(character)
+    return ranks.rank(character) > config.isolation_threshold
+end
+
+---@param previous string
+---@param target string
+function M.observed_bigram(previous, target)
+    local loaded = ensure()
+    if not loaded then
+        return false
+    end
+    return has_observed_bigram(loaded, previous, target)
+end
+
+M.isolation_lambda = config.isolation_lambda
+
+-- 整串重算；只作为路径级缓存的对照 oracle，不在解码热路径使用
+function M.reference_isolation_penalty(value)
     if value == "" or ranks.count == 0 then
         return 0
     end

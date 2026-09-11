@@ -22,7 +22,7 @@ local status = model.status()
 assert(not status.loaded and status.error, "模型缺失没有保留错误状态")
 assert(#errors == 1 and errors[1]:find(status.error, 1, true), "模型错误没有记录一次")
 assert(model.logp(model.BOS, model.BOS, "你") == 0, "无模型概率不是零")
-assert(model.isolation_penalty("龘") == 0, "无模型仍计算生僻字惩罚")
+assert(model.reference_isolation_penalty("龘") == 0, "无模型仍计算生僻字惩罚")
 assert(#errors == 1, "模型错误被重复记录")
 
 local result = require("tiger_sentence.decoder").decode_full("ldac")

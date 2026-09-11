@@ -10,6 +10,7 @@ rime_api = {
     end,
 }
 
+local config = require("tiger_sentence.config")
 local reader = require("tiger_sentence.model.kn")
 local temporary = os.tmpname()
 
@@ -276,11 +277,15 @@ assert(restored_lexicon == "旧二进制词典\n", "生成失败后没有恢复�
 assert(restored_ranks == "旧字频模块\n", "生成失败后没有恢复字频模块")
 
 local schema = read_all(root .. "/tiger_sentence.schema.yaml")
+-- 方案是用户面，config.lua 是兜底；两者的同名默认值必须一致，改动时不能各自漂移
 assert(
-    schema:find("  min_retained_raw_length: 0\n", 1, true),
-    "最少保留编码不是默认值 0"
+    schema:find("  min_retained_raw_length: " .. config.min_retained_raw_length .. "\n", 1, true),
+    "方案的最少保留编码默认值与 config.lua 不一致"
 )
-assert(schema:find("  high_freq_limit: 1500\n", 1, true), "高频过滤不是默认值 1500")
+assert(
+    schema:find("  high_freq_limit: " .. config.high_frequency_limit .. "\n", 1, true),
+    "方案的高频过滤默认值与 config.lua 不一致"
+)
 assert(
     schema:find("recognizer:\n  import_preset: default\n", 1, true),
     "recognizer 未导入 Rime 默认规则"
@@ -352,10 +357,11 @@ assert(lexicon.candidate_count == candidate_count, "二进制词典候选总数�
 assert(lexicon.lookup("u", 0)[1].o, "最优整码单字没有标记")
 assert(not lexicon.lookup("ue", 0)[1].o, "非最优整码单字被错误标记")
 local filtered_codes, filtered_candidates = 0, 0
-for _, candidates in lexicon.entries(1500) do
+for _, candidates in lexicon.entries(config.high_frequency_limit) do
     filtered_codes = filtered_codes + 1
     filtered_candidates = filtered_candidates + #candidates
 end
+-- 审计基线：默认过滤值或码表变化后必须重新核对这两个数字并同步文档记录
 assert(filtered_codes == 13556, "高频过滤后的编码总数偏离已审计基线")
 assert(filtered_candidates == 14411, "高频过滤后的候选总数偏离已审计基线")
 local maximum_codes, maximum_candidates = 0, 0
@@ -378,8 +384,15 @@ for _, candidates in lexicon.entries() do
     default_codes = default_codes + 1
     default_candidates = default_candidates + #candidates
 end
-assert(default_codes == filtered_codes, "默认高频过滤的编码数不一致")
-assert(default_candidates == filtered_candidates, "默认高频过滤的候选数不一致")
+-- 不传限制值必须等价于显式传入 config.lua 的默认过滤值
+assert(
+    default_codes == filtered_codes,
+    "省略限制值与显式传入默认值的编码数不一致"
+)
+assert(
+    default_candidates == filtered_candidates,
+    "省略限制值与显式传入默认值的候选数不一致"
+)
 local rank_file = assert(io.open(root .. "/lua/tiger_sentence/data/ranks.lua", "r"))
 local rank_count = 0
 for line in rank_file:lines() do
@@ -522,10 +535,10 @@ adapter.deactivate(env)
 context.input = "notacode"
 context_composing = true
 context.menu = false
-local preserved_trackers = { keep = { text = "保留" } }
-state_store.get(env).trackers = preserved_trackers
-assert(adapter.processor(key("space"), env) == 2)
-assert(context.input == "notacode" and state_store.get(env).trackers == preserved_trackers)
+state_store.get(env).trackers = { keep = { text = "保留" } }
+assert(adapter.processor(key("space"), env) == 1)
+assert(context.input == "notacode", "无候选时空格改写了输入")
+assert(next(state_store.get(env).trackers) == nil, "无候选时空格没有重置会话")
 adapter.deactivate(env)
 
 context.input = ""
@@ -582,7 +595,7 @@ local highlight_context = {
         return true
     end,
 }
-local highlight_env = { engine = { context = highlight_context } }
+local highlight_env = { engine = { context = highlight_context, schema = schema_defaults } }
 assert(adapter.processor(key("Tab"), highlight_env) == 1 and highlighted == 1)
 assert(adapter.processor(key("Shift+Tab"), highlight_env) == 1 and highlighted == 0)
 assert(state_store.get(highlight_env).suspended, "Tab 没有暂停提前上屏")
@@ -601,6 +614,31 @@ for _, available in ipairs({ false, true }) do
     adapter.deactivate(highlight_env)
 end
 rawset(highlight_context, "highlight", native_highlight)
+
+-- 高亮后继续输入字母固定该候选的文本与编码边界
+highlight_context.input = "xr"
+highlight_segment.selected_index = 0
+rawset(highlight_segment.menu, "candidate_count", function()
+    return 1
+end)
+assert(adapter.processor(key("Tab"), highlight_env) == 1)
+assert(adapter.processor(key("x"), highlight_env) == 1)
+local locked_state = state_store.get(highlight_env)
+assert(#locked_state.locks == 1, "高亮后继续输入没有锁定候选")
+assert(
+    locked_state.locks[1].raw == "xr"
+        and locked_state.locks[1].text == "反"
+        and locked_state.locks[1].boundaries == "2,3;",
+    "锁定边界不符"
+)
+assert(highlight_context.input == "xrx", "锁定后的组合输入不符")
+assert(adapter.processor(key("BackSpace"), highlight_env) == 1)
+assert(#locked_state.locks == 0, "退到锁定编码以内没有解锁")
+assert(highlight_context.input == "xr", "解锁后的组合输入不符")
+adapter.deactivate(highlight_env)
+rawset(highlight_segment.menu, "candidate_count", function()
+    return 3
+end)
 
 local committed = {}
 ---@type boolean|string
@@ -667,6 +705,19 @@ reject_remainder = "silent"
 rebuilt, rebuild_error = pcall(adapter.processor, key(early_commit_case:sub(9, 9)), rolling_env)
 assert(not rebuilt and tostring(rebuild_error):match("拒绝替换组合输入"))
 assert(#committed == 0 and rolling_context.input == early_commit_case:sub(1, 8))
+adapter.deactivate(rolling_env)
+
+-- 锁定候选时替换组合输入失败必须回滚锁定状态与已提交前缀
+reject_remainder = false
+rolling_context.input = "xr"
+state_store.get(rolling_env).tab_pending = true
+reject_remainder = true
+local locked, lock_error = pcall(adapter.processor, key("x"), rolling_env)
+assert(not locked and tostring(lock_error):match("拒绝替换组合输入"))
+assert(#state_store.get(rolling_env).locks == 0, "替换失败后仍留下锁定状态")
+assert(rolling_context.input == "xr", "替换失败后原组合输入丢失")
+assert(state_store.get(rolling_env).committed_text == "", "替换失败后已提交前缀未回滚")
+assert(#committed == 0, "替换失败后仍发生了提交")
 adapter.deactivate(rolling_env)
 reject_remainder = false
 rolling_context.input = ""

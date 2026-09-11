@@ -17,6 +17,10 @@ local aggregate_threshold = config.aggregate_threshold
 ---@field text_length integer
 ---@field raw_length integer
 ---@field edge_count integer
+---@field edge_chars string[]|nil 本边新增的字符；种子节点为空
+---@field _isolation_penalty number|nil 路径级孤立惩罚缓存
+---@field _isolation_last_char string|nil
+---@field _isolation_last_isolated boolean|nil
 
 ---@class TigerSentenceBeamBucket
 ---@field [integer] TigerSentenceBeamState

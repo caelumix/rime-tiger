@@ -206,6 +206,60 @@ int main(int argc, char **argv) {
       check(output + commit() == test.text, "整句提交不符：" + test.raw);
     }
   }
+  // 高亮后继续输入字母固定候选的文本与编码边界，退到边界以内才解锁
+  auto has_candidates = [&]() {
+    RimeCandidateListIterator it{};
+    if (!api->candidate_list_begin(session, &it))
+      return false;
+    const bool any = api->candidate_list_next(&it);
+    api->candidate_list_end(&it);
+    return any;
+  };
+  api->set_option(session, "tiger_sentence_early_commit", false);
+  type("xrxbj");
+  // 前端渲染候选后菜单才就绪，高亮循环依赖已准备的菜单
+  check(candidates() == std::vector<std::string>{"反刍", "反秉"},
+        "锁定前的候选不符");
+  check(api->process_key(session, 0xFF09, 0), "高亮按键未处理");
+  check(api->process_key(session, 'a', 0), "锁定按键未处理");
+  check(commit().empty(), "关闭提前上屏时锁定发生了提交");
+  check(std::string(api->get_input(session)) == "xrxbja",
+        "锁定后的剩余编码不符");
+  check(!has_candidates(), "锁定边界之外的候选没有消失");
+  check(api->process_key(session, 0xFF08, 0), "退格未处理");
+  check(std::string(api->get_input(session)) == "xrxbj",
+        "解锁后的剩余编码不符");
+  check(candidates() == std::vector<std::string>{"反刍", "反秉"},
+        "解锁后的候选不符");
+  check(api->process_key(session, 0xFF1B, 0), "清空按键未处理");
+  // 开启提前上屏时锁定直接提交已确认部分
+  api->set_option(session, "tiger_sentence_early_commit", true);
+  std::string locked_output;
+  for (unsigned char key : std::string("xrxbj")) {
+    check(api->process_key(session, key, 0), "整句按键未处理");
+    locked_output += commit();
+  }
+  check(locked_output == "反" && std::string(api->get_input(session)) == "xbj",
+        "提前上屏边界不符");
+  check(candidates() == std::vector<std::string>{"刍", "秉"},
+        "锁定前的候选不符");
+  check(api->process_key(session, 0xFF09, 0), "高亮按键未处理");
+  check(api->process_key(session, 'a', 0), "锁定按键未处理");
+  check(commit() == "秉", "锁定候选没有提交已确认部分");
+  check(std::string(api->get_input(session)) == "a",
+        "提前上屏锁定后的剩余编码不符");
+  check(!has_candidates(), "锁定边界之外的候选没有消失");
+  check(api->process_key(session, 0xFF1B, 0), "清空按键未处理");
+  // 空码顶屏的唯一性计入合法的非首选重码单字，整段单边不再提前提交首选单字
+  api->set_option(session, "tiger_sentence_early_commit", true);
+  for (unsigned char key : std::string("hx")) {
+    check(api->process_key(session, key, 0), "整句按键未处理");
+    check(commit().empty(), "整段单边提前提交了首选单字");
+  }
+  check(api->process_key(session, 'q', 0), "整句按键未处理");
+  check(commit().empty(), "非首选重码单字没有阻止空码顶屏");
+  check(std::string(api->get_input(session)) == "hxq", "空码顶屏后的输入不符");
+  check(api->process_key(session, 0xFF1B, 0), "清空按键未处理");
   api->set_option(session, "tiger_sentence_allow_duplicate_single", false);
   for (const auto &test : std::vector<std::pair<std::string, std::string>>{
            {"xrxbj", "反秉"}, {"xrxbj;", "反刍"}}) {

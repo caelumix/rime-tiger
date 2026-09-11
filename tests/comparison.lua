@@ -25,7 +25,12 @@ if mode then
     local samples = { append = {}, edit = {} }
     local function measure(raw, category)
         local started = os.clock()
-        backend.decode(raw, false, "", true, high_frequency_limit)
+        if mode == "reference_backend" then
+            -- 参考实现自 2026-09-10 起把第四个位置参数用作锁定候选
+            backend.decode(raw)
+        else
+            backend.decode(raw, false, "", true, high_frequency_limit)
+        end
         local values = samples[category]
         values[#values + 1] = (os.clock() - started) * 1000000
     end
@@ -115,65 +120,81 @@ local corpus = {}
 for raw in io.lines(corpus_path) do
     corpus[#corpus + 1] = raw
 end
-for _, limit in ipairs({ 0, 1500 }) do
+-- 环境变量限定单个组合（"过滤,重码"），供对照工具分片并行调用
+local limit_filter, duplicate_filter
+if os.getenv("COMPARISON_SHARD") then
+    local limit_value, duplicate_value =
+        assert(os.getenv("COMPARISON_SHARD"):match("^(%d+),(%w+)$"))
+    limit_filter = tonumber(limit_value)
+    duplicate_filter = duplicate_value == "true"
+end
+local function compare_combination(limit, duplicate)
     reference_backend.apply_high_freq_limit(limit)
-    for _, duplicate in ipairs({ false, true }) do
-        reference_backend.set_allow_duplicate_single({
-            get_option = function()
-                return duplicate
-            end,
-        })
-        for code in lexicon.entries(limit) do
-            local left = decoder.decode_full(code, false, "", duplicate, limit)
-            assert(
-                equal(left, reference_backend.decode_full(code)),
-                "参考整码候选不一致：" .. code
-            )
-            count = count + 1
-        end
-        for _, raw in ipairs(corpus) do
-            if #raw <= 128 then
-                decoder.reset()
-                reference_backend.reset_decode_cache()
-                local sequence = {}
-                for length = 1, #raw do
-                    sequence[#sequence + 1] = raw:sub(1, length)
-                end
-                for length = #raw - 1, 1, -1 do
-                    sequence[#sequence + 1] = raw:sub(1, length)
-                end
-                sequence[#sequence + 1] = raw .. "a"
-                sequence[#sequence + 1] = "xrxbj"
-                for _, input in ipairs(sequence) do
-                    if #input <= 128 then
-                        local full = decoder.decode_full(input, false, "", duplicate, limit)
-                        assert(
-                            equal(full, reference_backend.decode_full(input), true),
-                            "参考完整解码不一致："
-                                .. input
-                                .. "，过滤 "
-                                .. limit
-                                .. "，重码 "
-                                .. tostring(duplicate)
+    reference_backend.set_allow_duplicate_single({
+        get_option = function()
+            return duplicate
+        end,
+    })
+    for code in lexicon.entries(limit) do
+        local left = decoder.decode_full(code, false, "", duplicate, limit)
+        assert(
+            equal(left, reference_backend.decode_full(code)),
+            "参考整码候选不一致：" .. code
+        )
+        count = count + 1
+    end
+    for _, raw in ipairs(corpus) do
+        if #raw <= 128 then
+            decoder.reset()
+            reference_backend.reset_decode_cache()
+            local sequence = {}
+            for length = 1, #raw do
+                sequence[#sequence + 1] = raw:sub(1, length)
+            end
+            for length = #raw - 1, 1, -1 do
+                sequence[#sequence + 1] = raw:sub(1, length)
+            end
+            sequence[#sequence + 1] = raw .. "a"
+            sequence[#sequence + 1] = "xrxbj"
+            for _, input in ipairs(sequence) do
+                if #input <= 128 then
+                    local full = decoder.decode_full(input, false, "", duplicate, limit)
+                    assert(
+                        equal(full, reference_backend.decode_full(input), true),
+                        "参考完整解码不一致："
+                            .. input
+                            .. "，过滤 "
+                            .. limit
+                            .. "，重码 "
+                            .. tostring(duplicate)
+                    )
+                    assert(
+                        equal(full, decoder.decode(input, false, "", duplicate, limit)),
+                        "本地编辑缓存不一致：" .. input
+                    )
+                    if not equal(full, reference_backend.decode(input)) then
+                        reference_backend_edit_errors = reference_backend_edit_errors + 1
+                        edit_failures[#edit_failures + 1] = string.format(
+                            '{"input":%q,"limit":%d,"duplicate":%s}',
+                            input,
+                            limit,
+                            tostring(duplicate)
                         )
-                        assert(
-                            equal(full, decoder.decode(input, false, "", duplicate, limit)),
-                            "本地编辑缓存不一致：" .. input
-                        )
-                        if not equal(full, reference_backend.decode(input)) then
-                            reference_backend_edit_errors = reference_backend_edit_errors + 1
-                            edit_failures[#edit_failures + 1] = string.format(
-                                '{"input":%q,"limit":%d,"duplicate":%s}',
-                                input,
-                                limit,
-                                tostring(duplicate)
-                            )
-                        end
-                        count = count + 1
-                        edits = edits + 1
                     end
+                    count = count + 1
+                    edits = edits + 1
                 end
             end
+        end
+    end
+end
+for _, limit in ipairs({ 0, 1500 }) do
+    for _, duplicate in ipairs({ false, true }) do
+        if
+            (limit_filter == nil or limit == limit_filter)
+            and (duplicate_filter == nil or duplicate == duplicate_filter)
+        then
+            compare_combination(limit, duplicate)
         end
     end
 end

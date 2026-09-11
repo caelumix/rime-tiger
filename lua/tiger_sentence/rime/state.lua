@@ -13,6 +13,8 @@ local next_session = 0
 ---@field empty_code_pending table|nil
 ---@field dot_armed boolean
 ---@field suspended boolean
+---@field locks TigerSentenceLock[]
+---@field tab_pending boolean
 
 local function empty_state()
     return {
@@ -24,6 +26,8 @@ local function empty_state()
         empty_code_pending = nil,
         dot_armed = false,
         suspended = false,
+        locks = {},
+        tab_pending = false,
     }
 end
 

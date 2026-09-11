@@ -182,6 +182,16 @@ assert(decoder.decode_full("aag", false, "", true, 0)[1].text == "书")
 assert(decoder.has_complete_candidate("gyygch", "羊"))
 assert(not decoder.has_complete_candidate("gyygch", "错"))
 assert(not decoder.has_complete_candidate("vuy", ""))
+-- 空码顶屏的排除文本只忽略与该文本完全相同的完整路径
+assert(decoder.has_complete_candidate("otw", ""))
+assert(
+    not decoder.has_complete_candidate("otw", "", true, 1500, "题", true, nil),
+    "排除唯一候选后仍报告完整路径"
+)
+assert(
+    decoder.has_complete_candidate("otw", "", true, 1500, "是", true, nil),
+    "不同文本的完整路径被误排除"
+)
 local optimal_single = decoder.decode_full("u", false, "", true, 0)[1]
 assert(optimal_single.text == "的")
 assert(
@@ -201,6 +211,58 @@ local baseline_cases = {
 for raw, expected in pairs(baseline_cases) do
     assert(decoder.decode_full(raw)[1].text == expected, "基准候选回归：" .. raw)
 end
+
+-- 惰性切分串必须与字面量一致：候选互相比会在两边同时出错时漏判
+assert(decoder.decode_full("xrxbj")[1].segmented == "xr xbj", "惰性切分串不符：xrxbj")
+assert(
+    decoder.decode_full("korylkugkugkskorkor")[1].segmented == "kor yl kug kug ks kor kor",
+    "惰性切分串不符：korylkugkugkskorkor"
+)
+assert(decoder.decode_full("gyygch")[1].segmented == "gyy gch", "惰性切分串不符：gyygch")
+
+-- 路径级孤立惩罚缓存必须与整串重算一致；漏传 edge_chars 或缓存失效会在这里暴露
+local function assert_isolation_oracle(raw, include_early_commit, required_prefix, lock)
+    local result = decoder.decode_full(raw, include_early_commit, required_prefix, true, 1500, lock)
+    for index = 1, #result do
+        local candidate = result[index]
+        assert(
+            decoder.path_isolation_penalty(candidate.path)
+                == model.reference_isolation_penalty(candidate.text),
+            "路径级孤立惩罚与整串重算不一致：" .. raw .. " 候选 " .. index
+        )
+    end
+    for index = 1, #result.early_commit_candidates do
+        local candidate = result.early_commit_candidates[index]
+        assert(
+            decoder.path_isolation_penalty(candidate.path)
+                == model.reference_isolation_penalty(candidate.text),
+            "尾码候选的孤立惩罚不一致：" .. raw .. " 候选 " .. index
+        )
+    end
+end
+for raw in pairs(baseline_cases) do
+    assert_isolation_oracle(raw)
+    assert_isolation_oracle(raw, true)
+end
+for _, raw in ipairs({
+    "xrxbj;a",
+    "korylkugkugkskorkor",
+    "kormylkugkugkskorgkorg",
+    "xrxbj",
+    "gyygyygyyae",
+    "awmenamcunta",
+}) do
+    assert_isolation_oracle(raw)
+    assert_isolation_oracle(raw, true)
+end
+
+-- 缺少边字符的格网节点必须报错，而不是静默漏算惩罚
+local orphan_item = { text = "甲", raw_length = 1, previous = { raw_length = 0 } }
+local orphan_ok, orphan_error = pcall(decoder.path_isolation_penalty, orphan_item)
+assert(
+    not orphan_ok and tostring(orphan_error):find("缺少字符数组", 1, true),
+    tostring(orphan_error)
+)
 
 -- 从无效选重尾码退回后，不能复用缺失有效路径的格网
 for _, limit in ipairs({ 0, 1500 }) do
@@ -496,4 +558,71 @@ rawset(lexicon, "lookup", function(code)
 end)
 assert(not decoder.has_complete_candidate("zzzz"))
 assert(#decoder.decode_full("zzzz") == 0)
+assert(decoder.has_complete_candidate("zz", ""), "整段单边没有隐式显示非首选多字词")
+assert(
+    not decoder.has_complete_candidate("zz", "", true, 1500, nil, true, nil),
+    "组句资格没有排除非首选多字词"
+)
 rawset(lexicon, "lookup", lookup)
+
+-- 锁定候选只允许从锁定边界继续扩展，且不进入增量缓存
+local function lock_of(raw, candidate)
+    local boundaries, node = {}, candidate.path
+    while node and node.raw_length > 0 do
+        table.insert(boundaries, 1, node.raw_length .. "," .. node.text_length .. ";")
+        node = node.previous
+    end
+    return {
+        raw = raw:sub(1, candidate.path.raw_length),
+        text = candidate.text,
+        boundaries = table.concat(boundaries),
+    }
+end
+
+local locked_raw = "korylkugkugkskorkor"
+local unlocked = decoder.decode_full(locked_raw)
+local lock = lock_of(locked_raw, unlocked[1])
+local locked_result = decoder.decode_full(locked_raw, false, "", true, 1500, lock)
+assert(#locked_result > 0, "锁定解码没有候选")
+assert(locked_result[1].text == unlocked[1].text, "锁定解码首选不符")
+for index = 1, #locked_result do
+    assert(
+        locked_result[index].text:sub(1, #lock.text) == lock.text,
+        "锁定解码越过了锁定边界"
+    )
+    assert(
+        decoder.path_isolation_penalty(locked_result[index].path)
+            == model.reference_isolation_penalty(locked_result[index].text),
+        "锁定路径的孤立惩罚与整串重算不一致"
+    )
+    assert(
+        locked_result[index].segmented == unlocked[index].segmented,
+        "锁定路径的切分串与完整解码不一致"
+    )
+end
+local locked_extended = decoder.decode_full(locked_raw .. "gyygch", false, "", true, 1500, lock)
+assert(
+    #locked_extended > 0 and locked_extended[1].text:sub(1, #lock.text) == lock.text,
+    "锁定后的追加解码不符"
+)
+assert(
+    #decoder.decode_full("zzzz", false, "", true, 1500, lock) == 0,
+    "锁定前缀不匹配仍产生候选"
+)
+assert(
+    decoder.has_complete_candidate(locked_raw .. "gyygch", lock.text, true, 1500, nil, false, lock),
+    "锁定完整候选遗漏"
+)
+
+decoder.reset()
+assert_equal(
+    decoder.decode(locked_raw),
+    decoder.decode_full(locked_raw),
+    "锁定解码前的缓存"
+)
+assert_equal(decoder.decode(locked_raw, false, "", true, 1500, lock), locked_result, "锁定解码")
+assert_equal(
+    decoder.decode(locked_raw),
+    decoder.decode_full(locked_raw),
+    "锁定解码污染了增量缓存"
+)

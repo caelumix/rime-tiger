@@ -2,7 +2,7 @@
 schema:
   schema_id: tiger_sentence
   name: 虎整句
-  version: "20260910"
+  version: "20260912"
   author:
     - TigerClaw
     - Caelumix
@@ -82,6 +82,9 @@ key_binder:
     - { when: has_menu, accept: equal, send: Page_Down }
 
 punctuator:
+  # 关闭 Rime 待决的 ASCII 数字分隔候选（如“1”后输入逗号）；
+  # 小数点已在 Lua 处理，其余标点按符号表上屏
+  digit_separators: ""
   __include: dicts/tiger_sentence_symbols:/punctuator
   symbols:
     __include: dicts/tiger_sentence_symbols:/symbols

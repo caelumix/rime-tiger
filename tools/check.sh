@@ -279,7 +279,7 @@ case "${1:-all}" in
     python3 tools/compare.py --lua "$lua_command" "$@"
     ;;
   *)
-    echo "用法：tools/check.sh [all|format|format-check|typecheck|syntax|test|portable|native|comparison|model|benchmark 参数…]" >&2
+    echo "用法：tools/check.sh [all|format|format-check|typecheck|syntax|test|portable|native|comparison [--quick]|model|benchmark 参数…]" >&2
     exit 2
     ;;
 esac

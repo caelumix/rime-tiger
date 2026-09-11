@@ -20,6 +20,7 @@ return {
     long_input_full_beam_length = 24,
     -- 只限制未上屏编码；历史上下文保留用于续句评分
     max_raw_length = 128,
+    min_retained_raw_length = 0,
     observed_cache_entries = 32768,
     rank_penalty = 0.03,
     score_cache_entries = 32768,

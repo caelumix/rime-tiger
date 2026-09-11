@@ -15,6 +15,15 @@ Beam 只为最终候选回溯分词。模型页缓存上限为 2 MiB；超过缓
   不强制执行全量 GC
 - 增量缓存：相同输入和严格追加可以复用格网；长前缀退格裁去尾部，
   选重边界只重建末端；短输入、替换和策略变化必须重算
+- 锁定候选：会话状态保存锁定项（原始编码、文本、逐边边界）；带锁解码
+  从锁定边界重建种子路径，只重算文本分数，不允许新边跨越锁定处，
+  且不入增量缓存；`Tab` 高亮后置 `tab_pending`，下一个字母确认锁定，
+  退格到锁定编码以内释放锁定，空闲时重置会话
+- 孤立惩罚：按路径增量累计，缓存在格网节点的 `_isolation_penalty` 与
+  `_isolation_last_*` 上；每个非种子节点必须携带本边的 `edge_chars`，
+  缺失立即报错；整串重算只作为 oracle 供回归使用
+- 展示串：候选的 `segmented` 由元表按需生成，节点只保存 `_raw`；
+  解码热路径不分配切分字符串
 - 前缀过滤：合法切分先竞争前 20 项，再按已提交文本过滤，
   自动提交证据只包含兼容前缀
 - 选重：每条合法词典边按根码表中的等级选择，支持前导零，
@@ -24,7 +33,8 @@ Beam 只为最终候选回溯分词。模型页缓存上限为 2 MiB；超过缓
 - Beam：相同文本合并概率并保留最优路径；24 码内宽度为 200，
   之后为 48；候选窗和置信证据最多保留 20 项
 - 提前上屏：完整路径和合法未完成尾码共同计算概率；普通证据需要三代，
-  强证据需要两代，最多跨过三个中性代
+  强证据需要两代，最多跨过三个中性代；空码顶屏在唯一候选时还要用
+  `has_complete_candidate` 排除同一文本后确认没有其它合法完整路径
 - 模型：文件格式、分页和关闭逻辑位于 `model/`；初始加载失败时记录错误，
   并切换到无模型排序
 - Lua：静态分析、格式检查和 CLI 回归统一使用 Lua 5.4
@@ -48,21 +58,33 @@ Beam 只为最终候选回溯分词。模型页缓存上限为 2 MiB；超过缓
 
 ## 修改落点
 
-- 阈值、奖励和候选限制位于 `config.lua`，由解码回归和内存基准验证
+- 阈值、奖励和候选限制位于 `config.lua`，由解码回归和内存基准验证；
+  用户可调的键在方案 YAML 中另有用户侧默认值，运行时以方案为准、缺键时回落
+  到 `config.lua`，回归断言两者的同名默认值一致
 - 格网、选重和默认候选规则位于 `decoder.lua`，由解码回归验证
 - Beam 比较和剪枝位于 `decoder/beam.lua`，由候选聚合回归验证
 - 置信度算法位于 `decoder/confidence.lua`，由前缀和概率回归验证
 - 补充语料位于 `decoder/supplement.lua`，由解析和解码集成回归验证
 - KN 公式与分页格式位于 `model.lua` 和 `model/`，由模型回归验证
-- Rime 按键和生命周期位于 `rime/`，由模拟及原生按键回归验证
+- Rime 按键和生命周期位于 `rime/`，由模拟及原生按键回归验证；
+  锁定候选的确认、解锁与空闲重置位于 `rime/adapter.lua`，由原生按键对照验证
+- 带锁解码位于 `decoder.lua` 的 `decode_locked`，空码唯一性位于
+  `decoder.lua` 的 `has_complete_candidate`，由解码回归验证
+- 路径级孤立惩罚位于 `decoder.lua` 的 `path_isolation_penalty`，判定入口
+  与整串 oracle 位于 `model.lua`，由解码回归的 oracle 断言与性能消融验证
 - 分类符号位于 `dicts/tiger_sentence_symbols.yaml`，由原生符号回归验证
 - 码表、字频和白名单示例位于 `dicts/` 及根目录，由构建回归验证
 - 模型身份位于 `models/sentence-ngram-mobile.meta.yaml`，由哈希检查验证
 
-方案、码表和模型数据分别维护版本；字频表及生成物不维护数据版本，过滤边界由生成的实际
-字频条目数决定。紧凑词典以 magic、模型以既有头字段标识二进制格式。回归固定 14,374 个
-原始编码、15,369 个原始候选和 20,000 条字频；使用 `high_freq_limit: 1500` 时为
-13,556 个编码和 14,411 个候选，并比较公开码表、字频生成的二进制词典和字频模块。
+方案、码表和模型数据分别维护版本：方案版本
+（`tiger_sentence.schema.yaml` 的 `version`）是本地方案源文件的最后修改日期，
+改动方案源文件时同步更新，不追随上游版本；码表版本标数据日期
+（`dicts/tiger_sentence.codes.txt` 头部注释），模型版本见
+`models/sentence-ngram-mobile.meta.yaml`；字频表及生成物不维护数据版本，
+过滤边界由生成的实际字频条目数决定。紧凑词典以 magic、模型以既有头字段标识
+二进制格式。回归固定 14,374 个原始编码、15,369 个原始候选和 20,000 条字频；
+默认过滤值（`config.lua` 的 `high_frequency_limit`）下为 13,556 个编码和
+14,411 个候选，并比较公开码表、字频生成的二进制词典和字频模块，
 `high_freq_limit: 0` 时不做高频过滤。
 
 码表接受 BOM、常见换行、空白分隔和大写编码（转换为小写），版本注释可选；格式错误
@@ -87,11 +109,46 @@ tools/check.sh benchmark session 24 50 72631 dicts/tiger_sentence.codes.txt 0 1
 峰值 RSS 包含启动和预热。该基准不代表自然语料分布或 iOS 真机内存限制。基准只在本地
 手动执行，GitHub 工作流不运行任何性能测试。
 
+## 检查耗时与运行环境
+
+下表给出各项检查的耗时量级与依赖，便于判断一次改动需要跑哪些检查。
+纯 Lua 检查都在秒级，只有解码对照和依赖 librime 的检查需要额外工具。
+具体耗时随机器、核心数与文件系统变化，只用于判断数量级：
+
+| 命令 | 耗时 | 额外依赖 |
+| --- | ---: | --- |
+| `tools/check.sh syntax` | 0.1 s | Lua 5.4 |
+| `tools/check.sh format-check` | 0.1 s | stylua、shfmt |
+| `tools/check.sh typecheck` | 3.6 s | lua-language-server |
+| `tools/check.sh portable` | 0.3 s | Lua 5.4 |
+| `tools/check.sh test` | 6.1 s | Lua 5.4 |
+| `tools/check.sh all` | 10 s | 上述工具与模型二进制 |
+| `tools/check.sh native` | 1 s | C++17、librime、librime-lua |
+| `tools/check.sh comparison --quick` | 约 1.5 min | 同上 |
+| `tools/check.sh comparison` | 约 3 min | 同上 |
+| `tools/check.sh benchmark session 32 100` | 4 s | 与长度和次数成正比 |
+
+`all` 只依赖 Lua、静态检查工具和模型二进制；`native` 与 `comparison` 还需要
+C++ 编译器与 librime。日常改动先用 `portable`/`test`/`all`，改动解码、评分或
+排序时再加 `comparison --quick`，确认候选一致后再跑完整 `comparison`；完整对照
+会执行全量解码、编辑和性能消融。
+
+解码对照按四个互相独立的组合（`high_freq_limit` 两种 × 单字重码开关两种）
+分片并行，手工分片时给单个分片设置环境变量
+`COMPARISON_SHARD=过滤,重码`（例如 `1500,true`）；不设置时按原有串行方式执行。
+并行只改变调度，合并后的计数与串行一致；改动用例或分片逻辑后，
+可用同一语料分别跑串行与四个分片核对计数：
+
+```sh
+env -u COMPARISON_SHARD lua tests/comparison.lua <当前> <参考> <语料>
+COMPARISON_SHARD=1500,true lua tests/comparison.lua <当前> <参考> <语料>
+```
+
 ## CI 覆盖边界
 
 GitHub 工作流只运行 `tools/check.sh portable` 和 `tests/package.py`，覆盖 Lua 语法、
-不依赖模型的行为回归和打包自测。以下检查依赖模型、原生库或本地工具，工作流无法
-执行，改动代码时必须在本机补齐：
+不依赖模型的行为回归和打包自测。以下检查依赖模型、原生库或本地工具，工作流无法执行，
+改动代码时必须在本地补齐：
 
 - `tools/check.sh all`：格式、Shell lint、Lua 类型、模型身份、完整行为回归和错误分支
   覆盖率。需要模型二进制 `models/sentence-ngram-mobile.bin`（从 Release 下载，SHA-256
@@ -101,7 +158,7 @@ GitHub 工作流只运行 `tools/check.sh portable` 和 `tests/package.py`，覆
 - `tools/check.sh comparison`：改动解码、评分或排序时对照参考实现。
 - `tools/check.sh benchmark`：改动热路径时手动测量。
 
-模型二进制不入库、不进工作流，所以涉及模型的回归只能在本机执行。
+模型二进制不入库、不进工作流，所以涉及模型的回归只能在本地执行。
 
 ## 发布检查
 
@@ -116,7 +173,8 @@ GitHub 工作流只运行 `tools/check.sh portable` 和 `tests/package.py`，覆
 
 `tools/check.sh native` 另用同样的隔离示例部署实际方案，通过 librime API 逐键检查半角/全角
 `/szq` 的十个候选、翻页选重、单独斜杠、分号快符及左右括号直接提交，并验证特定短语在
-提前上屏开/关时的首选、切分和最终提交，以及续句的单字重码开关与显式选重、完整候选窗口。
+提前上屏开/关时的首选、切分和最终提交，以及续句的单字重码开关与显式选重、完整候选窗口、
+高亮后锁定候选与退格解锁。
 需要 C++17 编译器、librime 开发库和 librime-lua；可用 `CXX` 和 `RIME_SHARED_DATA_DIR`
 指定编译器和共享配置目录。该测试不读取私有配置或词典，也不部署到正在使用的输入法目录。
 
@@ -143,9 +201,9 @@ GitHub 工作流只运行 `tools/check.sh portable` 和 `tests/package.py`，覆
 打包使用公开示例，不读取根目录个人词表。模型二进制不进入源码或此运行包，模型元数据
 位于包的 `models/` 目录。CHANGELOG 最新条目置顶，日常变更记在
 `## YYYY-MM-DD` 标题下，发布时在同一标题末尾追加版本号（如 `## 2026-09-10 - v1.0.0`）
-形成版本标题。Release 工作流以 Tag 作为 Release 版本，并读取 CHANGELOG 中该版本标题到
-下一个带版本标题之间的全部日期段，仅标日期的条目也计入。Release 说明不重复版本号，
-将版本标题改为日期并把标题整体降一级，列出 Schema、Dict 和 Model 版本；仅当
-`models/sentence-ngram-mobile.meta.yaml` 的 `sha256` 与上一个 Tag 不同（含没有上一个
-Tag）时才追加 `## 模型` 段。固定 ZIP 时间戳和文件顺序使相同输入重复打包字节一致；
-输出原子替换，失败时旧包保留，临时文件清理。
+形成版本标题；连字符后只写版本号，简述另起一行放在标题下。Release 工作流以 Tag 作为
+Release 版本，并读取 CHANGELOG 中该版本标题到下一个带版本标题之间的全部日期段，
+仅标日期的条目也计入。Release 说明不重复版本号，将版本标题改为日期并把标题整体降一级，
+列出 Schema、Dict 和 Model 版本；仅当 `models/sentence-ngram-mobile.meta.yaml` 的
+`sha256` 与上一个 Tag 不同（含没有上一个 Tag）时才追加 `## 模型` 段。固定 ZIP 时间戳和
+文件顺序使相同输入重复打包字节一致；输出原子替换，失败时旧包保留，临时文件清理。

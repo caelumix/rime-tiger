@@ -3,6 +3,7 @@
 
 import argparse
 import os
+import re
 import runpy
 import subprocess
 import sys
@@ -105,16 +106,34 @@ def main():
             ],
             check=True,
         )
-        content = notes.read_text()
-        assert (
-            'v1.0.0' not in content
-            and '## 模型' not in content
-            and '- Schema：`20260910`' in content
-            and '- Dict：`20260904`' in content
-            and '- Model：`20260822`' in content
-            and 'e3953f8f1526b871eb81fe887a8ae4a6edf79edffd33e388b95e2915adadb2d3'
-            in content
+
+        # 期望值取自各自的源数据
+        def source_field(pattern, text):
+            found = re.search(pattern, text, re.MULTILINE)
+            assert found, pattern
+            return found.group(1)
+
+        schema_version = source_field(
+            r'^  version: "(\d{8})"$',
+            (ROOT / 'tiger_sentence.schema.yaml').read_text(),
         )
+        dict_version = source_field(
+            r'^# version: "(\d{8})"$',
+            (ROOT / 'dicts/tiger_sentence.codes.txt').read_text(),
+        )
+        metadata = (ROOT / 'models/sentence-ngram-mobile.meta.yaml').read_text()
+        model_version = source_field(r'^version: "(\d{8})"$', metadata)
+        model_sha256 = source_field(r'^sha256: "([0-9a-f]{64})"$', metadata)
+        model_file = source_field(r'^file: "([A-Za-z0-9._-]+)"$', metadata)
+        content = notes.read_text()
+        assert 'v1.0.0' not in content and '## 模型' not in content
+        for line in (
+            f'- Schema：`{schema_version}`',
+            f'- Dict：`{dict_version}`',
+            f'- Model：`{model_version}`',
+            f'- 模型 SHA-256：`{model_sha256}`',
+        ):
+            assert line in content, line
         subprocess.run(
             [
                 'python3',
@@ -126,10 +145,7 @@ def main():
             check=True,
         )
         content = notes.read_text()
-        assert (
-            '## 模型' in content
-            and '- 文件：`sentence-ngram-mobile.bin`' in content
-        )
+        assert '## 模型' in content and f'- 文件：`{model_file}`' in content
         release_notes = runpy.run_path(str(ROOT / 'tools/release_notes.py'))
         section = release_notes['changelog_section'](
             '# 变更日志\n\n'
